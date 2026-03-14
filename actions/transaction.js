@@ -305,11 +305,11 @@ export async function getUserTransactions(query = {}) {
 export async function scanReceipt(file) {
   try {
     if (!file) {
-      throw new Error("Please upload a receipt image");
+      return { error: "Please upload a receipt image" };
     }
 
     if (!file.type?.startsWith("image/")) {
-      throw new Error("Only image files are supported");
+      return { error: "Only image files are supported" };
     }
 
     const model = getGeminiModel();
@@ -355,12 +355,12 @@ export async function scanReceipt(file) {
     const data = JSON.parse(jsonText);
 
     if (!data || Object.keys(data).length === 0) {
-      throw new Error("Could not detect a valid receipt in the image");
+      return { error: "Could not detect a valid receipt in the image" };
     }
 
     const parsedAmount = Number.parseFloat(data.amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      throw new Error("Could not extract a valid receipt amount");
+      return { error: "Could not extract a valid receipt amount" };
     }
 
     const parsedDate = new Date(data.date);
@@ -383,7 +383,7 @@ export async function scanReceipt(file) {
     };
   } catch (error) {
     console.error("Error scanning receipt:", error);
-    throw new Error(mapReceiptScanError(error));
+    return { error: mapReceiptScanError(error) };
   }
 }
 

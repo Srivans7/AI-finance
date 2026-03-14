@@ -18,9 +18,10 @@ const aj = arcjet({
       mode: "LIVE",
     }),
     detectBot({
-      mode: "LIVE", // will block requests. Use "DRY_RUN" to log only
+      mode: "DRY_RUN", // log only - prevents false positives on mobile browsers
       allow: [
         "CATEGORY:SEARCH_ENGINE", // Google, Bing, etc
+        "CATEGORY:BROWSER", // all real browsers including mobile
         "GO_HTTP", // For Inngest
         // See the full list at https://arcjet.com/bot-list
       ],
