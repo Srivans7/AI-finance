@@ -7,12 +7,86 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import aj from "@/lib/arcjet";
 import { request } from "@arcjet/next";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 const serializeAmount = (obj) => ({
   ...obj,
   amount: obj.amount.toNumber(),
 });
+
+const RECEIPT_CATEGORIES = new Set([
+  "housing",
+  "transportation",
+  "groceries",
+  "utilities",
+  "entertainment",
+  "food",
+  "shopping",
+  "healthcare",
+  "education",
+  "personal",
+  "travel",
+  "insurance",
+  "gifts",
+  "bills",
+  "other-expense",
+]);
+
+function getGeminiModel() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not configured");
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  return genAI.getGenerativeModel({ model: modelName });
+}
+
+function extractJsonFromText(text) {
+  const cleanedText = text.replace(/```(?:json)?\n?/gi, "").trim();
+  const firstBrace = cleanedText.indexOf("{");
+  const lastBrace = cleanedText.lastIndexOf("}");
+
+  if (firstBrace === -1 || lastBrace === -1 || firstBrace > lastBrace) {
+    throw new Error("No JSON object found in Gemini response");
+  }
+
+  return cleanedText.slice(firstBrace, lastBrace + 1);
+}
+
+function mapReceiptScanError(error) {
+  const message = String(error?.message || "").toLowerCase();
+
+  if (message.includes("429") || message.includes("quota")) {
+    return "AI usage limit reached. Please try again later.";
+  }
+
+  if (
+    message.includes("401") ||
+    message.includes("403") ||
+    message.includes("api key")
+  ) {
+    return "AI scanner is not configured correctly. Please contact support.";
+  }
+
+  if (message.includes("404") || message.includes("model")) {
+    return "AI model is temporarily unavailable. Please try again later.";
+  }
+
+  if (
+    message.includes("500") ||
+    message.includes("503") ||
+    message.includes("unavailable") ||
+    message.includes("timed out")
+  ) {
+    return "AI service is temporarily unavailable. Please try again.";
+  }
+
+  if (message.includes("valid receipt") || message.includes("receipt amount")) {
+    return error.message;
+  }
+
+  return "Failed to scan receipt. Please upload a clear receipt image and try again.";
+}
 
 // Create Transaction
 export async function createTransaction(data) {
@@ -230,7 +304,15 @@ export async function getUserTransactions(query = {}) {
 // Scan Receipt
 export async function scanReceipt(file) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    if (!file) {
+      throw new Error("Please upload a receipt image");
+    }
+
+    if (!file.type?.startsWith("image/")) {
+      throw new Error("Only image files are supported");
+    }
+
+    const model = getGeminiModel();
 
     // Convert File to ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();
@@ -254,7 +336,7 @@ export async function scanReceipt(file) {
         "category": "string"
       }
 
-      If its not a recipt, return an empty object
+      If it is not a receipt, return an empty object
     `;
 
     const result = await model.generateContent([
@@ -269,24 +351,39 @@ export async function scanReceipt(file) {
 
     const response = await result.response;
     const text = response.text();
-    const cleanedText = text.replace(/```(?:json)?\n?/g, "").trim();
+    const jsonText = extractJsonFromText(text);
+    const data = JSON.parse(jsonText);
 
-    try {
-      const data = JSON.parse(cleanedText);
-      return {
-        amount: parseFloat(data.amount),
-        date: new Date(data.date),
-        description: data.description,
-        category: data.category,
-        merchantName: data.merchantName,
-      };
-    } catch (parseError) {
-      console.error("Error parsing JSON response:", parseError);
-      throw new Error("Invalid response format from Gemini");
+    if (!data || Object.keys(data).length === 0) {
+      throw new Error("Could not detect a valid receipt in the image");
     }
+
+    const parsedAmount = Number.parseFloat(data.amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      throw new Error("Could not extract a valid receipt amount");
+    }
+
+    const parsedDate = new Date(data.date);
+    const normalizedDate = Number.isNaN(parsedDate.getTime())
+      ? new Date().toISOString()
+      : parsedDate.toISOString();
+
+    const normalizedCategory = String(data.category || "other-expense")
+      .trim()
+      .toLowerCase();
+
+    return {
+      amount: parsedAmount,
+      date: normalizedDate,
+      description: String(data.description || "").trim(),
+      category: RECEIPT_CATEGORIES.has(normalizedCategory)
+        ? normalizedCategory
+        : "other-expense",
+      merchantName: String(data.merchantName || "").trim(),
+    };
   } catch (error) {
     console.error("Error scanning receipt:", error);
-    throw new Error("Failed to scan receipt");
+    throw new Error(mapReceiptScanError(error));
   }
 }
 
