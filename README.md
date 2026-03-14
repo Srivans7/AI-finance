@@ -3,7 +3,7 @@
 
 ## Environment setup
 
-1. Copy `.env.example` to `.env`.
+1. Fill .env
 2. Fill all values.
 
 ## Deployment
